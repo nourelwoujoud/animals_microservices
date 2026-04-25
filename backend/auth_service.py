@@ -29,8 +29,8 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_token(email: str) -> str:
     payload = {
-        "sub": email,                                           # FIX : "sub" est la convention JWT standard (était "email")
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=2),
+        "sub": email,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24),  # ✅ 2h → 24h
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -40,16 +40,13 @@ def create_token(email: str) -> str:
 def register(user: dict):
     print("Incoming register:", user)
 
-    # Validation des champs
     for field in ["name", "email", "password"]:
         if field not in user or not str(user[field]).strip():
             raise HTTPException(status_code=400, detail=f"Champ manquant ou vide : {field}")
 
-    # Email déjà utilisé
     if users_collection.find_one({"email": user["email"]}):
         raise HTTPException(status_code=400, detail="Email déjà utilisé")
 
-    # Longueur minimale du mot de passe
     if len(user["password"]) < 6:
         raise HTTPException(status_code=400, detail="Le mot de passe doit contenir au moins 6 caractères")
 
@@ -76,20 +73,20 @@ def login(user: dict):
     db_user = users_collection.find_one({"email": user["email"]})
 
     if not db_user:
-        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")  # FIX : message neutre (sécurité)
+        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
 
     if not verify_password(user["password"], db_user["password"]):
-        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")  # FIX : même message (sécurité)
+        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
 
     token = create_token(user["email"])
 
     return {
-        "access_token": token,          # FIX : renommé "token" → "access_token" (convention OAuth2 / Flutter attend ça)
-        "token_type":   "bearer",       # FIX : ajouté (standard OAuth2)
+        "access_token": token,
+        "token_type":   "bearer",
         "email":        user["email"],
     }
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)   
+    uvicorn.run(app, host="0.0.0.0", port=8001)

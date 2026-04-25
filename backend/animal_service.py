@@ -5,7 +5,6 @@ import redis
 import json
 import threading
 
-# ── PostgreSQL ────────────────────────────────────────────────────────────────
 engine = create_engine("postgresql://postgres:0000@localhost:5432/animal_adoption_db")
 metadata = MetaData()
 
@@ -23,23 +22,17 @@ animals = Table(
 
 metadata.create_all(engine)
 
-# ── Redis ─────────────────────────────────────────────────────────────────────
 redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
-
-# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI()
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def get_connection():
-    """Retourne une connexion SQLAlchemy."""
     return engine.connect()
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/animals")
 def get_animals():
-    with get_connection() as conn:                          # FIX : utiliser "with" (fermeture auto)
+    with get_connection() as conn:
         result = conn.execute(select(animals)).fetchall()
     return [dict(row._mapping) for row in result]
 
@@ -50,10 +43,8 @@ def get_animal(animal_id: int):
         result = conn.execute(
             select(animals).where(animals.c.id == animal_id)
         ).first()
-
     if not result:
         raise HTTPException(status_code=404, detail="Animal non trouvé")
-
     return dict(result._mapping)
 
 
@@ -61,74 +52,83 @@ def get_animal(animal_id: int):
 def update_status(data: dict):
     animal_id = data.get("animal_id")
     status    = data.get("status")
-
     if not animal_id or not status:
         raise HTTPException(status_code=400, detail="animal_id et status requis")
-
-    # Vérifier que l'animal existe avant de mettre à jour
     with get_connection() as conn:
-        existing = conn.execute(
-            select(animals).where(animals.c.id == animal_id)
-        ).first()
-
-        if not existing:                                    # FIX : vérification existence ajoutée
+        existing = conn.execute(select(animals).where(animals.c.id == animal_id)).first()
+        if not existing:
             raise HTTPException(status_code=404, detail="Animal non trouvé")
-
-        conn.execute(
-            update(animals).where(animals.c.id == animal_id).values(status=status)
-        )
-        conn.commit()                                       # FIX : commit dans le même "with"
-
-    return {"message": f"Animal {animal_id} mis à jour → {status}"}
+        conn.execute(update(animals).where(animals.c.id == animal_id).values(status=status))
+        conn.commit()
+    return {"message": f"Animal {animal_id} → {status}"}
 
 
-# ── Redis Listener ────────────────────────────────────────────────────────────
+# ── Listener Redis ────────────────────────────────────────────────────────────
 
-def listen_adoptions():
-    """Écoute la queue Redis et met à jour le statut des animaux adoptés."""
+def listen_redis():
+    """Écoute adoption_requests ET cancel_requests."""
     print("🔴 Redis listener démarré...")
     while True:
         try:
-            msg = redis_client.blpop("adoption_requests", timeout=0)
+            # Écoute les deux queues en même temps (blpop multi-clés)
+            msg = redis_client.blpop(["adoption_requests", "cancel_requests"], timeout=0)
             if not msg:
                 continue
 
-            data      = json.loads(msg[1])
+            queue = msg[0]   # nom de la queue
+            data  = json.loads(msg[1])
             animal_id = data.get("animal_id")
             email     = data.get("email")
 
             if not animal_id or not email:
-                print("⚠️  Message Redis invalide :", data)
+                print("⚠️  Message invalide :", data)
                 continue
 
-            # Mettre le statut à "adopted"
-            with get_connection() as conn:
-                conn.execute(
-                    update(animals)
-                    .where(animals.c.id == animal_id)
-                    .values(status="adopted")
-                )
-                conn.commit()
+            # ── Adoption ──────────────────────────────────────────────────────
+            if queue == "adoption_requests":
+                animal_data = None
+                with get_connection() as conn:
+                    row = conn.execute(
+                        select(animals).where(animals.c.id == animal_id)
+                    ).first()
+                    if row:
+                        animal_data = dict(row._mapping)
+                    conn.execute(
+                        update(animals).where(animals.c.id == animal_id).values(status="adopted")
+                    )
+                    conn.commit()
 
-            print(f"✅ Animal {animal_id} adopté par {email}")
+                print(f"✅ Animal {animal_id} adopté par {email}")
 
-            # Confirmer à l'adoption_service via Redis
-            redis_client.lpush(
-                f"user:{email}:adoption",
-                json.dumps({"animal_id": animal_id, "status": "adopted"}),
-            )
+                adoption_record = {
+                    "animal_id": animal_id,
+                    "status": "adopted",
+                    "email": email,
+                    "animal": animal_data or {"id": animal_id},
+                }
+                redis_client.lpush(f"user:{email}:adoptions", json.dumps(adoption_record))
+                redis_client.lpush(f"user:{email}:adoption",  json.dumps({"animal_id": animal_id, "status": "adopted"}))
 
-        except Exception as e:                              # FIX : ne pas crasher le thread sur erreur
+            # ── Annulation ────────────────────────────────────────────────────
+            elif queue == "cancel_requests":
+                with get_connection() as conn:
+                    conn.execute(
+                        update(animals).where(animals.c.id == animal_id).values(status="available")
+                    )
+                    conn.commit()
+                print(f"🔄 Animal {animal_id} remis disponible (annulation par {email})")
+
+        except Exception as e:
             print("❌ Erreur Redis listener :", e)
 
 
 @app.on_event("startup")
 def start_redis_listener():
-    thread = threading.Thread(target=listen_adoptions, daemon=True)
+    thread = threading.Thread(target=listen_redis, daemon=True)
     thread.start()
     print("🚀 Animal Service démarré sur le port 8002")
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)            
+    uvicorn.run(app, host="0.0.0.0", port=8002)
