@@ -1,0 +1,7 @@
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.animal.txt .
+RUN pip install --no-cache-dir -r requirements.animal.txt
+COPY animal_service.py .
+EXPOSE 8002
+CMD ["uvicorn", "animal_service:app", "--host", "0.0.0.0", "--port", "8002"]

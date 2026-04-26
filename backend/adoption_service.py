@@ -2,9 +2,16 @@
 from fastapi import FastAPI, HTTPException
 import redis
 import json
+import os   # ✅ ajouté
 
 app = FastAPI()
-redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+
+# ✅ FIX : utilise REDIS_HOST depuis Docker (nom du service = "redis")
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    decode_responses=True
+)
 
 
 @app.post("/adopt")
@@ -20,7 +27,6 @@ def adopt(data: dict):
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="animal_id doit être un entier")
 
-    # Vérifier doublon
     existing = redis_client.lrange(f"user:{email}:adoptions", 0, -1)
     for item in existing:
         try:
@@ -40,15 +46,11 @@ def adopt(data: dict):
 
 @app.delete("/adopt/{animal_id}")
 def cancel_adoption(animal_id: int, data: dict):
-    """
-    Annule l'adoption d'un animal pour un utilisateur donné.
-    Body : { "email": str }
-    """
     email = data.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="email requis")
 
-    key = f"user:{email}:adoptions"
+    key   = f"user:{email}:adoptions"
     items = redis_client.lrange(key, 0, -1)
 
     removed = False
@@ -65,7 +67,6 @@ def cancel_adoption(animal_id: int, data: dict):
     if not removed:
         raise HTTPException(status_code=404, detail="Adoption non trouvée")
 
-    # Notifier animal_service pour remettre le statut à "available"
     redis_client.lpush(
         "cancel_requests",
         json.dumps({"email": email, "animal_id": animal_id}),

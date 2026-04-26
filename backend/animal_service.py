@@ -4,8 +4,15 @@ from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, 
 import redis
 import json
 import threading
+import os
 
-engine = create_engine("postgresql://postgres:0000@localhost:5432/animal_adoption_db")
+# ✅ FIX : host.docker.internal pour atteindre PostgreSQL depuis Docker
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:0000@host.docker.internal:5432/animal_adoption_db"
+)
+
+engine = create_engine(DATABASE_URL)
 metadata = MetaData()
 
 animals = Table(
@@ -22,7 +29,13 @@ animals = Table(
 
 metadata.create_all(engine)
 
-redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+# ✅ FIX : REDIS_HOST depuis env Docker
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    decode_responses=True
+)
+
 app = FastAPI()
 
 
@@ -63,19 +76,15 @@ def update_status(data: dict):
     return {"message": f"Animal {animal_id} → {status}"}
 
 
-# ── Listener Redis ────────────────────────────────────────────────────────────
-
 def listen_redis():
-    """Écoute adoption_requests ET cancel_requests."""
     print("🔴 Redis listener démarré...")
     while True:
         try:
-            # Écoute les deux queues en même temps (blpop multi-clés)
             msg = redis_client.blpop(["adoption_requests", "cancel_requests"], timeout=0)
             if not msg:
                 continue
 
-            queue = msg[0]   # nom de la queue
+            queue = msg[0]
             data  = json.loads(msg[1])
             animal_id = data.get("animal_id")
             email     = data.get("email")
@@ -84,7 +93,6 @@ def listen_redis():
                 print("⚠️  Message invalide :", data)
                 continue
 
-            # ── Adoption ──────────────────────────────────────────────────────
             if queue == "adoption_requests":
                 animal_data = None
                 with get_connection() as conn:
@@ -109,7 +117,6 @@ def listen_redis():
                 redis_client.lpush(f"user:{email}:adoptions", json.dumps(adoption_record))
                 redis_client.lpush(f"user:{email}:adoption",  json.dumps({"animal_id": animal_id, "status": "adopted"}))
 
-            # ── Annulation ────────────────────────────────────────────────────
             elif queue == "cancel_requests":
                 with get_connection() as conn:
                     conn.execute(
