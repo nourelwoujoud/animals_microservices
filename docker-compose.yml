@@ -1,20 +1,15 @@
-version: '3.9'
-
 services:
 
   redis:
-    image: redis:7.4
+    image: redis:7
     container_name: redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - app_network
 
   auth_service:
     build:
@@ -23,12 +18,8 @@ services:
     container_name: auth_service
     ports:
       - "8001:8001"
-    environment:
-      - MONGO_URL=mongodb+srv://mongo:1234@cluster0.huvqsic.mongodb.net/animal_db?retryWrites=true&w=majority
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
+    networks:
+      - app_network
 
   animal_service:
     build:
@@ -38,13 +29,13 @@ services:
     ports:
       - "8002:8002"
     environment:
-      - DATABASE_URL=postgresql://postgres:0000@host.docker.internal:5432/animal_adoption_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on:
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    networks:
+      - app_network
 
   adoption_service:
     build:
@@ -59,7 +50,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    networks:
+      - app_network
 
   api_gateway:
     build:
@@ -68,15 +60,13 @@ services:
     container_name: api_gateway
     ports:
       - "8000:8000"
-    environment:
-      - AUTH_URL=http://auth_service:8001
-      - ANIMAL_URL=http://animal_service:8002
-      - ADOPTION_URL=http://adoption_service:8003
     depends_on:
       - auth_service
       - animal_service
       - adoption_service
-    restart: unless-stopped
+    networks:
+      - app_network
 
-volumes:
-  redis_data:
+networks:
+  app_network:
+    driver: bridge
