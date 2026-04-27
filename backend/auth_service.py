@@ -1,6 +1,5 @@
-# auth_service.py
 from fastapi import FastAPI, HTTPException
-from passlib.context import CryptContext
+import bcrypt
 from jose import jwt
 import datetime
 from pymongo import MongoClient
@@ -17,22 +16,30 @@ app = FastAPI()
 # ── JWT & Hash ────────────────────────────────────────────────────────────────
 SECRET_KEY = "SECRET123"
 ALGORITHM  = "HS256"
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password[:72].encode("utf-8"))
+    # ✅ FIX : encoder en bytes AVANT de truncate à 72 bytes
+    password_bytes = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
+
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain[:72].encode("utf-8"), hashed)
+    # ✅ FIX : encoder en bytes AVANT de truncate à 72 bytes
+    plain_bytes  = plain.encode("utf-8")[:72]
+    hashed_bytes = hashed.encode("utf-8")
+    return bcrypt.checkpw(plain_bytes, hashed_bytes)
+
 
 def create_token(email: str) -> str:
     payload = {
         "sub": email,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24),  # ✅ 2h → 24h
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -87,6 +94,6 @@ def login(user: dict):
     }
 
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
