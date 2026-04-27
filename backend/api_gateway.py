@@ -1,4 +1,3 @@
-# api_gateway.py
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -14,9 +13,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-AUTH_URL     = "http://127.0.0.1:8001"
-ANIMAL_URL   = "http://127.0.0.1:8002"
-ADOPTION_URL = "http://127.0.0.1:8003"
+# ✅ FIX : utiliser les noms de services Docker Compose (pas 127.0.0.1)
+AUTH_URL     = "http://auth_service:8001"
+ANIMAL_URL   = "http://animal_service:8002"
+ADOPTION_URL = "http://adoption_service:8003"
 
 SECRET_KEY = "SECRET123"
 ALGORITHM  = "HS256"
@@ -110,10 +110,6 @@ async def adopt(adopt_info: dict, request: Request):
 
 @app.delete("/adopt/{animal_id}")
 async def cancel_adoption(animal_id: int, request: Request):
-    """
-    FIX : httpx.delete() ne supporte pas json= directement.
-    On passe le body via content= + headers Content-Type manuellement.
-    """
     email = _extract_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Token invalide ou expiré")
@@ -126,7 +122,7 @@ async def cancel_adoption(animal_id: int, request: Request):
             resp = await client.request(
                 "DELETE",
                 f"{ADOPTION_URL}/adopt/{animal_id}",
-                content=body,          # ✅ FIX : request() supporte content= sur DELETE
+                content=body,
                 headers=headers,
             )
             resp.raise_for_status()
